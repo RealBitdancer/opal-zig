@@ -1,0 +1,32 @@
+# Copyright (c) 2026 Bitdancer (github.com/RealBitdancer).
+# SPDX-License-Identifier: MIT
+
+# Runs the binding tests and builds the demo on Linux, macOS, and Windows.
+# Runs on pushes to main (which includes merges) and on demand.
+
+name: test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: zig build test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Test
+        run: zig build test
+
+      - name: Demo
+        run: zig build run
