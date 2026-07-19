@@ -47,7 +47,7 @@ pub fn main(init: std.process.Init) !void {
     const chip = try opal.Opal.create(allocator, sample_rate);
     defer chip.destroy(allocator);
 
-    for (patch) |w| chip.port(w[0], @intCast(w[1]));
+    for (patch) |w| chip.writeReg(w[0], @intCast(w[1]));
 
     const total_frames = melody.len * (gate_frames + tail_frames) + release_frames;
     const frames = try allocator.alloc(i16, total_frames * 2);
@@ -56,11 +56,11 @@ pub fn main(init: std.process.Init) !void {
     var pos: usize = 0;
     for (melody) |note| {
         const freq_hi: u8 = @intCast((@as(u16, note.block) << 2) | (note.fnum >> 8));
-        chip.port(0xA0, @truncate(note.fnum));
-        chip.port(0xB0, 0x20 | freq_hi);
+        chip.writeReg(0xA0, @truncate(note.fnum));
+        chip.writeReg(0xB0, 0x20 | freq_hi);
         chip.render(frames[pos .. pos + gate_frames * 2]);
         pos += gate_frames * 2;
-        chip.port(0xB0, freq_hi);
+        chip.writeReg(0xB0, freq_hi);
         chip.render(frames[pos .. pos + tail_frames * 2]);
         pos += tail_frames * 2;
     }

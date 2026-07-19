@@ -60,8 +60,7 @@ fn channelEnergy(frames: []const i16) struct { left: u64, right: u64 } {
 }
 
 test "initialized chip outputs silence" {
-    const chip = try opal.Opal.create(testing.allocator, opal.opl3_sample_rate);
-    defer chip.destroy(testing.allocator);
+    var chip = opal.Opal.init(opal.opl3_sample_rate);
 
     for (0..256) |_| {
         const s = chip.sample();
@@ -74,7 +73,7 @@ test "keyed-on voice produces audio and exposes operator state" {
     const chip = try opal.Opal.create(testing.allocator, opal.opl3_sample_rate);
     defer chip.destroy(testing.allocator);
 
-    for (test_voice) |w| chip.port(w.reg, w.val);
+    for (test_voice) |w| chip.writeReg(w.reg, w.val);
 
     var frames: [8192]i16 = undefined;
     chip.render(&frames);
@@ -85,9 +84,26 @@ test "keyed-on voice produces audio and exposes operator state" {
 
     const carrier = &chip.op[opal.carrierSlot(0)];
     try testing.expect(carrier.key != 0);
-    try testing.expect(carrier.envelope_stage >= 0);
-    try testing.expectEqual(&chip.op[opal.modulatorSlot(0)], chip.chan[0].op[0].?);
-    try testing.expectEqual(carrier, chip.chan[0].op[1].?);
+    try testing.expect(carrier.envelope_stage != .off);
+    try testing.expectEqual(opal.modulatorSlot(0), chip.chan[0].op_slot[0]);
+    try testing.expectEqual(opal.carrierSlot(0), chip.chan[0].op_slot[1]);
+    try testing.expectEqual(.two_op, chip.chan[0].chan_type);
+}
+
+test "a copy is a complete save state" {
+    const chip = try opal.Opal.create(testing.allocator, opal.opl3_sample_rate);
+    defer chip.destroy(testing.allocator);
+
+    for (test_voice) |w| chip.writeReg(w.reg, w.val);
+    var warmup: [2048]i16 = undefined;
+    chip.render(&warmup);
+
+    var copy = chip.*;
+    var original_frames: [2048]i16 = undefined;
+    var copy_frames: [2048]i16 = undefined;
+    chip.render(&original_frames);
+    copy.render(&copy_frames);
+    try testing.expectEqualSlices(i16, &original_frames, &copy_frames);
 }
 
 test "buffered writes match immediate writes after flush" {
@@ -96,8 +112,8 @@ test "buffered writes match immediate writes after flush" {
     const buffered = try opal.Opal.create(testing.allocator, opal.opl3_sample_rate);
     defer buffered.destroy(testing.allocator);
 
-    for (test_voice) |w| immediate.port(w.reg, w.val);
-    for (test_voice) |w| buffered.portBuffered(w.reg, w.val);
+    for (test_voice) |w| immediate.writeReg(w.reg, w.val);
+    for (test_voice) |w| buffered.writeRegBuffered(w.reg, w.val);
     buffered.flushWriteBuf();
 
     var immediate_frames: [2048]i16 = undefined;
@@ -111,7 +127,7 @@ test "pan moves output between stereo channels" {
     const chip = try opal.Opal.create(testing.allocator, opal.opl3_sample_rate);
     defer chip.destroy(testing.allocator);
 
-    for (test_voice) |w| chip.port(w.reg, w.val);
+    for (test_voice) |w| chip.writeReg(w.reg, w.val);
     var frames: [4096]i16 = undefined;
 
     chip.pan(0, 0);

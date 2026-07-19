@@ -8,7 +8,7 @@ build system and exposes it as a native Zig module. There is no code generation 
 no dependency beyond libc.
 
 The version is the bound opal release plus a packaging revision. This is version
-1.0.2-1, binding opal 1.0.2. A binding-only fix bumps the revision, a new opal release
+2.0.0-1, binding opal 2.0.0. A binding-only fix bumps the revision, a new opal release
 resets it.
 
 Design decisions that shape the public API live in [doc/design.md](doc/design.md).
@@ -22,7 +22,7 @@ Design decisions that shape the public API live in [doc/design.md](doc/design.md
 Add the dependency:
 
 ```sh
-zig fetch --save git+https://github.com/RealBitdancer/opal-zig#v1.0.2-1
+zig fetch --save git+https://github.com/RealBitdancer/opal-zig#v2.0.0-1
 ```
 
 Wire it into your `build.zig`:
@@ -40,46 +40,47 @@ exe.root_module.addImport("opal", opal_dep.module("opal"));
 ```zig
 const opal = @import("opal");
 
-var chip = try opal.Opal.create(allocator, 44100);
-defer chip.destroy(allocator);
+var chip = opal.Opal.init(44100);
 
-chip.port(0x105, 0x01); // OPL3 mode
+chip.writeReg(0x105, 0x01); // OPL3 mode
 // ... program a voice, key on a note ...
 
 var frames: [2048]i16 = undefined; // interleaved stereo
 chip.render(&frames);
 ```
 
-One rule carries over from C, and it is the only one that can hurt you: `Opal_Init` wires
-internal pointers into the instance's own address, so an instance must not be copied or
-relocated after initialization. `Opal.create` sidesteps the matter by pinning the roughly
-70 KiB instance to a heap address. If you place an instance yourself, call `init` on its
-final address and leave it there.
+An `Opal` instance is a plain value with no internal pointers. Copy, assign, or
+relocate it freely: a copy is a complete save state. The struct is about 70 KiB, so
+`Opal.create(allocator, rate)` and `destroy` are provided to keep it off the stack.
 
 ## API
 
 The eight C functions map to methods on `opal.Opal`:
 
-| C                    | Zig                            |
-| :------------------- | :----------------------------- |
-| `Opal_Init`          | `Opal.init`, or `Opal.create`  |
-| `Opal_SetSampleRate` | `Opal.setSampleRate`           |
-| `Opal_Port`          | `Opal.port`                    |
-| `Opal_PortBuffered`  | `Opal.portBuffered`            |
-| `Opal_FlushWriteBuf` | `Opal.flushWriteBuf`           |
-| `Opal_Pan`           | `Opal.pan`                     |
-| `Opal_Sample`        | `Opal.sample`, `Opal.render`   |
-| `Opal_Read`          | `Opal.read`                    |
+| C                      | Zig                           |
+| :--------------------- | :---------------------------- |
+| `opalInit`             | `Opal.init`, or `Opal.create` |
+| `opalSetSampleRate`    | `Opal.setSampleRate`          |
+| `opalWriteReg`         | `Opal.writeReg`               |
+| `opalWriteRegBuffered` | `Opal.writeRegBuffered`       |
+| `opalFlushWriteBuf`    | `Opal.flushWriteBuf`          |
+| `opalPan`              | `Opal.pan`                    |
+| `opalSample`           | `Opal.sample`, `Opal.render`  |
+| `opalReadStatus`       | `Opal.readStatus`             |
 
-`Opal.render` is a convenience over `Opal_Sample` that fills a buffer of interleaved
-stereo frames. The raw `Opal_*` functions are also exported for direct use.
+`Opal.render` is a convenience over `opalSample` that fills a buffer of interleaved
+stereo frames. The raw `opal*` functions are also exported for direct use.
 
 The structs (`Opal`, `Channel`, `Operator`, `WriteBuf`) are mirrored as `extern struct`
 with snake_case field names, so state useful to visualizers (`envelope_stage`, `eg_out`,
-`key`) is readable directly. `modulatorSlot(ch)` and `carrierSlot(ch)` return the operator
-indices for a melodic channel, as documented in the upstream header. The test suite
-verifies every field offset and struct size against the C compiler, so the mirrors cannot
-drift silently.
+`key`) is readable directly. `envelope_stage` and `chan_type` are typed as the
+non-exhaustive enums `EnvelopeStage` and `ChannelType`. Cross references between the
+structs are indices (`op_slot`, `mod_source`, `pair_index`, `out_source`) with the
+sentinels `op_none`, `mod_own_fb`, and `ch_none`, which is what makes a copied instance
+self-contained. `modulatorSlot(ch)` and `carrierSlot(ch)` return the operator indices
+for a melodic channel, as documented in the upstream header. The test suite verifies
+every field offset and struct size against the C compiler, so the mirrors cannot drift
+silently.
 
 ## Demo
 
@@ -96,7 +97,7 @@ zig build test
 ```
 
 runs layout verification against the C compiler plus behavioral tests: silence after
-init, tone generation, buffered write equivalence, and pan.
+init, tone generation, save-state copies, buffered write equivalence, and pan.
 
 ## Updating the bound opal release
 

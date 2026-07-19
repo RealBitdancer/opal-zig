@@ -17,7 +17,7 @@ tables together. The ABI test is the gate.
 
 ## Upstream C is a versioned dependency, not a vendored copy
 
-`build.zig.zon` pins `opal_c` to the opal release tarball (`v1.0.2`). `build.zig`
+`build.zig.zon` pins `opal_c` to the opal release tarball (`v2.0.0`). `build.zig`
 compiles `src/opal.c` from that package into the `opal` module.
 
 Updating means: new URL and hash, `zig build test`, fix mirrors if the ABI test fails,
@@ -43,26 +43,46 @@ ordering monotonic (`1.0.2-1 < 1.0.2-2 < 1.0.3-1`).
 Each release gets its own immutable git tag (`v1.0.2-1`). A binding fix is a new
 tag, never a moved one, which would break consumers' stored hashes.
 
-## Cross pointers are optional (`?*`)
+## Instances are plain values
 
-`Opal_Init` wires `master`, `chan`, `mod`, `channel_pair`, and `out_ptr` into the
-instance. Uninitialized storage would make non-optional pointer loads undefined
-behavior. Optionals match the C pointer types and stay zero-cost in an `extern struct`.
+Since opal 2.0.0 the `Opal` struct holds no pointers: every cross reference is an
+index into `Opal.op` or `Opal.chan`. An instance can be copied, assigned, memcpy'd,
+or relocated freely, and a copy is a complete save state. The binding therefore has
+no pinning or no-copy rule, and `init` returns the instance by value in the usual
+Zig shape:
+
+```zig
+var chip = opal.Opal.init(44100);
+```
+
+`create` and `destroy` remain as heap helpers because the instance is about 70 KiB,
+which is worth keeping off the stack in deeply nested or threaded code.
+
+## Cross references are index fields with sentinel constants
+
+`op_slot`, `chan_index`, `mod_source`, `pair_index`, and `out_source` mirror the
+upstream `uint8_t` index fields directly. The sentinels are plain constants
+(`op_none`, `mod_own_fb`, `ch_none`) rather than a wrapper type: the fields hold
+ordinary array indices in the common case, and a typed wrapper would tax every
+`chip.op[...]` lookup for the rare sentinel check.
+
+## State fields with named values are non-exhaustive enums
+
+`envelope_stage` and `chan_type` are `int` fields upstream with `#define`d value
+sets. The binding types them as `EnvelopeStage` and `ChannelType`, both
+`enum(c_int)` with a `_` tag: ABI-identical to the C int, switchable by name, and
+a value added by a future opal release stays representable instead of being
+undefined behavior.
 
 ## Methods are thin camelCase wrappers over the C API
 
 | Decision | Detail |
 | :------- | :----- |
-| Naming   | `port`, `portBuffered`, `setSampleRate`, and so on map one to one to `Opal_*`. |
-| `create` / `destroy` | Heap-pin the ~70 KiB instance so the no-copy rule is the default path. |
-| `render` | Fills an interleaved stereo `[]i16` via `Opal_Sample`. Not in C, convenience only. |
-| Raw externs | `Opal_*` remain `pub` for callers that want the C surface directly. |
-
-## Instance must not be copied after `init`
-
-`Opal_Init` stores pointers into the instance's own address. Copying or relocating
-after init leaves dangling internal pointers. After any move, call `init` again (which
-also resets chip state). Prefer `Opal.create`.
+| Naming   | `writeReg`, `writeRegBuffered`, `readStatus`, and so on map one to one to the `opal*` functions. |
+| `init`   | Returns the instance by value, the conventional Zig constructor shape. |
+| `create` / `destroy` | Heap helpers that keep the ~70 KiB instance off the stack. |
+| `render` | Fills an interleaved stereo `[]i16` via `opalSample`. Not in C, convenience only. |
+| Raw externs | The `opal*` functions remain `pub` for callers that want the C surface directly. |
 
 ## Examples live in `examples/<name>/src/`
 
@@ -75,5 +95,5 @@ steps once there is more than one.
 ## Slot helpers match the upstream header table
 
 `modulatorSlot(ch)` and `carrierSlot(ch)` use the same channel-to-slot map as
-`include/opal/opal.h`. Prefer these indices when reading operator state from another
-thread: the cross pointers still point into the live instance.
+`include/opal/opal.h`, saving callers from restating the table when locating
+operator state.

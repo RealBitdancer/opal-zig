@@ -4,7 +4,7 @@
 # Runs the binding tests and builds the demo on Linux, macOS, and Windows.
 # Runs on pushes to main (which includes merges) and on demand.
 
-name: test
+name: Test
 
 on:
   push:
