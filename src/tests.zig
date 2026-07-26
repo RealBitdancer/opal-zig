@@ -123,6 +123,25 @@ test "buffered writes match immediate writes after flush" {
     try testing.expectEqualSlices(i16, &immediate_frames, &buffered_frames);
 }
 
+// Regression: the resampler multiplied the 16.16 fraction by the step between
+// two chip samples in 32 bits. A step wider than half of full scale overflows,
+// which loud OPL3 material reaches routinely. Both steps here are wide enough
+// that the old code traps under UBSan and wraps without it.
+test "resampler interpolates a full-scale step without overflowing" {
+    const chip = try opal.Opal.create(testing.allocator, 44100);
+    defer chip.destroy(testing.allocator);
+
+    chip.sample_accum = 35281;
+    chip.last_output = .{ 8734, -8734 };
+    chip.curr_output = .{ -32768, 32767 };
+
+    const s = chip.sample();
+    try testing.expectEqual(-24468, s.left);
+    try testing.expectEqual(24467, s.right);
+    try testing.expect(s.left > chip.curr_output[0] and s.left < chip.last_output[0]);
+    try testing.expect(s.right > chip.last_output[1] and s.right < chip.curr_output[1]);
+}
+
 test "pan moves output between stereo channels" {
     const chip = try opal.Opal.create(testing.allocator, opal.opl3_sample_rate);
     defer chip.destroy(testing.allocator);

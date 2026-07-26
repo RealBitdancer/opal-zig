@@ -17,7 +17,7 @@ tables together. The ABI test is the gate.
 
 ## Upstream C is a versioned dependency, not a vendored copy
 
-`build.zig.zon` pins `opal_c` to the opal release tarball (`v2.0.0`). `build.zig`
+`build.zig.zon` pins `opal_c` to the opal release tarball (`v2.0.1`). `build.zig`
 compiles `src/opal.c` from that package into the `opal` module.
 
 Updating means: new URL and hash, `zig build test`, fix mirrors if the ABI test fails,

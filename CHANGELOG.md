@@ -4,6 +4,20 @@ All notable changes to this binding are documented here. The version is the boun
 release plus a packaging revision, so `1.0.2-1` is the first release binding opal
 `1.0.2`.
 
+## [2.0.1-1] - 2026-07-25
+
+### Changed
+
+- Binds opal 2.0.1, which fixes a 32-bit signed overflow in the output resampler.
+  The overflow was reachable whenever a track swings more than half of full scale
+  between two consecutive chip samples, and it aborted the process outright under
+  any toolchain that traps on signed overflow, which includes Zig's ReleaseSafe.
+
+### Added
+
+- A regression test that drives the resampler across a full-scale step, the case
+  that used to overflow, and pins the interpolated result.
+
 ## [2.0.0-1] - 2026-07-18
 
 ### Changed

@@ -8,7 +8,7 @@ build system and exposes it as a native Zig module. There is no code generation 
 no dependency beyond libc.
 
 The version is the bound opal release plus a packaging revision. This is version
-2.0.0-1, binding opal 2.0.0. A binding-only fix bumps the revision, a new opal release
+2.0.1-1, binding opal 2.0.1. A binding-only fix bumps the revision, a new opal release
 resets it.
 
 Design decisions that shape the public API live in [doc/design.md](doc/design.md).
@@ -22,7 +22,7 @@ Design decisions that shape the public API live in [doc/design.md](doc/design.md
 Add the dependency:
 
 ```sh
-zig fetch --save git+https://github.com/RealBitdancer/opal-zig#v2.0.0-1
+zig fetch --save git+https://github.com/RealBitdancer/opal-zig#v2.0.1-1
 ```
 
 Wire it into your `build.zig`:
