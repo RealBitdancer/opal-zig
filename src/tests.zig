@@ -8,6 +8,7 @@ const testing = std.testing;
 
 extern const opal_abi_sizes: [4]usize;
 extern const opal_abi_counts: [4]usize;
+extern const opal_abi_version: [4]c_int;
 extern const opal_abi_write_buf_offsets: [std.meta.fields(opal.WriteBuf).len]usize;
 extern const opal_abi_operator_offsets: [std.meta.fields(opal.Operator).len]usize;
 extern const opal_abi_channel_offsets: [std.meta.fields(opal.Channel).len]usize;
@@ -26,6 +27,17 @@ test "struct layouts match the C compiler" {
     try expectLayout(opal.Operator, opal_abi_sizes[1], opal_abi_counts[1], &opal_abi_operator_offsets);
     try expectLayout(opal.Channel, opal_abi_sizes[2], opal_abi_counts[2], &opal_abi_channel_offsets);
     try expectLayout(opal.Opal, opal_abi_sizes[3], opal_abi_counts[3], &opal_abi_opal_offsets);
+}
+
+test "version macros match the C header" {
+    try testing.expectEqual(opal_abi_version[0], opal.version_major);
+    try testing.expectEqual(opal_abi_version[1], opal.version_minor);
+    try testing.expectEqual(opal_abi_version[2], opal.version_patch);
+    try testing.expectEqual(opal_abi_version[3], opal.version);
+    try testing.expectEqual(2, opal.version_major);
+    try testing.expectEqual(0, opal.version_minor);
+    try testing.expectEqual(2, opal.version_patch);
+    try testing.expectEqual(20002, opal.version);
 }
 
 const RegWrite = struct { reg: u16, val: u8 };
@@ -67,6 +79,127 @@ test "initialized chip outputs silence" {
         try testing.expectEqual(0, s.left);
         try testing.expectEqual(0, s.right);
     }
+
+    for (chip.op) |op| {
+        try testing.expectEqual(.release, op.envelope_stage);
+        try testing.expectEqual(0x1FF, op.eg_out);
+        try testing.expectEqual(0, op.key);
+    }
+    for (chip.chan, 0..) |ch, i| {
+        try testing.expectEqual(.two_op, ch.chan_type);
+        const bank_pos = i % 9;
+        if (bank_pos < 3) {
+            try testing.expectEqual(i + 3, ch.pair_index);
+        } else if (bank_pos < 6) {
+            try testing.expectEqual(i - 3, ch.pair_index);
+        } else {
+            try testing.expectEqual(opal.ch_none, ch.pair_index);
+        }
+    }
+}
+
+test "disabling 4-op leaves pair_index in place" {
+    var chip = opal.Opal.init(opal.opl3_sample_rate);
+    chip.writeReg(0x105, 0x01);
+    chip.writeReg(0x104, 0x01);
+
+    try testing.expectEqual(.four_op, chip.chan[0].chan_type);
+    try testing.expectEqual(.four_op2, chip.chan[3].chan_type);
+    try testing.expectEqual(3, chip.chan[0].pair_index);
+    try testing.expectEqual(0, chip.chan[3].pair_index);
+    try testing.expectEqual(.two_op, chip.chan[1].chan_type);
+
+    chip.writeReg(0x104, 0x00);
+    try testing.expectEqual(.two_op, chip.chan[0].chan_type);
+    try testing.expectEqual(.two_op, chip.chan[3].chan_type);
+    try testing.expectEqual(3, chip.chan[0].pair_index);
+    try testing.expectEqual(0, chip.chan[3].pair_index);
+}
+
+test "NEW off keeps bank 1 silent and preserves CHA" {
+    const chip = try opal.Opal.create(testing.allocator, opal.opl3_sample_rate);
+    defer chip.destroy(testing.allocator);
+
+    const bank1_voice = [_]RegWrite{
+        .{ .reg = 0x105, .val = 0x01 },
+        .{ .reg = 0x120, .val = 0x21 },
+        .{ .reg = 0x140, .val = 0x3F },
+        .{ .reg = 0x160, .val = 0xF0 },
+        .{ .reg = 0x180, .val = 0x0F },
+        .{ .reg = 0x123, .val = 0x21 },
+        .{ .reg = 0x143, .val = 0x00 },
+        .{ .reg = 0x163, .val = 0xF0 },
+        .{ .reg = 0x183, .val = 0x0F },
+        .{ .reg = 0x1C0, .val = 0x31 },
+        .{ .reg = 0x1A0, .val = 0x44 },
+        .{ .reg = 0x1B0, .val = 0x32 },
+    };
+    for (bank1_voice) |w| chip.writeReg(w.reg, w.val);
+
+    try testing.expect(chip.opl3_enabled);
+    try testing.expectEqual(0xFFFF, chip.chan[9].cha);
+    try testing.expectEqual(0xFFFF, chip.chan[9].chb);
+
+    var frames: [4096]i16 = undefined;
+    chip.render(&frames);
+    var peak_on: u16 = 0;
+    for (frames) |s| peak_on = @max(peak_on, @abs(s));
+    try testing.expect(peak_on > 1000);
+
+    chip.writeReg(0x105, 0x00);
+    try testing.expect(!chip.opl3_enabled);
+    try testing.expectEqual(0xFFFF, chip.chan[9].cha);
+    try testing.expectEqual(0xFFFF, chip.chan[9].chb);
+
+    chip.render(&frames);
+    chip.render(&frames);
+    var peak_off: u16 = 0;
+    for (frames) |s| peak_off = @max(peak_off, @abs(s));
+    try testing.expectEqual(0, peak_off);
+
+    chip.writeReg(0x105, 0x01);
+    chip.render(&frames);
+    var peak_back: u16 = 0;
+    for (frames) |s| peak_back = @max(peak_back, @abs(s));
+    try testing.expect(peak_back > 1000);
+}
+
+test "enabling OPL3 without writing C0 is silent" {
+    const chip = try opal.Opal.create(testing.allocator, opal.opl3_sample_rate);
+    defer chip.destroy(testing.allocator);
+
+    for (test_voice) |w| {
+        if (w.reg == 0xC0) continue;
+        chip.writeReg(w.reg, w.val);
+    }
+
+    try testing.expect(chip.opl3_enabled);
+    try testing.expectEqual(0, chip.chan[0].cha);
+    try testing.expectEqual(0, chip.chan[0].chb);
+
+    var frames: [4096]i16 = undefined;
+    chip.render(&frames);
+    for (frames) |s| try testing.expectEqual(0, s);
+}
+
+test "waveform 4 is stored while NEW is clear" {
+    var chip = opal.Opal.init(opal.opl3_sample_rate);
+    chip.writeReg(0xE0, 0x04);
+    try testing.expectEqual(4, chip.op[0].waveform);
+    try testing.expect(!chip.opl3_enabled);
+}
+
+test "masked timer overflow still sets the timer flag" {
+    var chip = opal.Opal.init(opal.opl3_sample_rate);
+    chip.writeReg(0x02, 0xFF);
+    chip.writeReg(0x04, 0x41);
+
+    var frames: [32]i16 = undefined;
+    chip.render(&frames);
+
+    const status = chip.readStatus();
+    try testing.expectEqual(0x40, status & 0x40);
+    try testing.expectEqual(0, status & 0x80);
 }
 
 test "keyed-on voice produces audio and exposes operator state" {

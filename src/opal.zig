@@ -10,6 +10,11 @@
 
 const std = @import("std");
 
+pub const version_major = 2;
+pub const version_minor = 0;
+pub const version_patch = 2;
+pub const version = version_major * 10000 + version_minor * 100 + version_patch;
+
 pub const opl3_sample_rate = 49716;
 pub const channel_count = 18;
 pub const operator_count = 36;
@@ -20,12 +25,14 @@ pub const write_buf_delay = 2;
 pub const op_none: u8 = 0xFF;
 /// Operator.mod_source only: the operator's own feedback value.
 pub const mod_own_fb: u8 = 0xFE;
-/// No paired channel.
+/// Channel cannot pair. Used on channels 6-8 and 15-17.
 pub const ch_none: u8 = 0xFF;
 
 /// Envelope generator stage of an operator. Non-exhaustive, so a value a
 /// future opal release might add stays representable.
 pub const EnvelopeStage = enum(c_int) {
+    /// Defined for visualizers. The core never writes it: idle operators sit
+    /// in `release` with `eg_out` at 511 or more.
     off = -1,
     attack = 0,
     decay = 1,
@@ -100,12 +107,16 @@ pub const Operator = extern struct {
 
 /// A single channel, which can contain two or more operators. op_slot holds
 /// the indices of the channel's operators in Opal.op (op_none when absent).
-/// pair_index is the partner channel in 4-op mode (ch_none when unpaired).
+/// pair_index is the physical 4-op partner (0+3, 1+4, 2+5, and the same on
+/// bank 1). Init pre-wires those pairs. Channels that cannot pair (6-8,
+/// 15-17) use ch_none. Whether 4-op is active is chan_type, not pair_index.
 /// out_source lists up to four operator indices whose out values sum into
 /// the channel output, describing the active FM algorithm routing.
 pub const Channel = extern struct {
     op_slot: [4]u8,
     chan_index: u8,
+    /// Physical 4-op partner. Pre-wired on capable channels even while
+    /// chan_type is two_op. ch_none only on channels that cannot pair.
     pair_index: u8,
     out_source: [4]u8,
     chan_type: ChannelType,
@@ -225,9 +236,9 @@ pub const Opal = extern struct {
     }
 
     /// Set the panning level for a channel: 0 left, 64 middle, 127 right.
-    /// ch is 0 to 17, or 0 to 8 with bit 8 set for the second bank.
-    pub fn pan(self: *Opal, ch: u16, level: u8) void {
-        opalPan(self, ch, level);
+    /// channel is 0 to 17, or 0 to 8 with bit 8 set for the second bank.
+    pub fn pan(self: *Opal, channel: u16, level: u8) void {
+        opalPan(self, channel, level);
     }
 
     /// Generate one stereo 16-bit PCM sample.
@@ -260,6 +271,6 @@ pub extern fn opalSetSampleRate(self: *Opal, sample_rate: c_int) void;
 pub extern fn opalWriteReg(self: *Opal, reg_num: u16, val: u8) void;
 pub extern fn opalWriteRegBuffered(self: *Opal, reg_num: u16, val: u8) void;
 pub extern fn opalFlushWriteBuf(self: *Opal) void;
-pub extern fn opalPan(self: *Opal, reg_num: u16, pan: u8) void;
+pub extern fn opalPan(self: *Opal, channel: u16, pan: u8) void;
 pub extern fn opalSample(self: *Opal, left: *i16, right: *i16) void;
 pub extern fn opalReadStatus(self: *Opal) u8;

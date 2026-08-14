@@ -4,6 +4,33 @@ All notable changes to this binding are documented here. The version is the boun
 release plus a packaging revision, so `1.0.2-1` is the first release binding opal
 `1.0.2`.
 
+## [2.0.2-1] - 2026-08-13
+
+### Changed
+
+- Binds opal 2.0.2. NEW (register 105h bit 0) is a live mode bit: bank 1, waveforms
+  4-7, CHA and CHB, and four-operator pairing apply only while it is set. Disabling
+  4-op no longer clears `pair_index`. That field is the physical partner, or `ch_none`
+  for channels that cannot pair. `chan_type` says whether 4-op is active. `init` now
+  sets every operator's `eg_out` to 0x1FF, so a snapshot taken before the first sample
+  is silent. A masked timer overflow now sets FT1 or FT2. IRQ (bit 7) is set only when
+  that timer is unmasked.
+
+### Added
+
+- `version_major`, `version_minor`, `version_patch`, and the packed `version`
+  (`major * 10000 + minor * 100 + patch`), matching the `OPAL_VERSION_*` macros in
+  `opal.h`.
+- Tests for the 2.0.2 core fixes: pair-index wiring, NEW as a live mode bit, silence
+  after enabling OPL3 without writing C0, stored waveforms 4-7 while NEW is clear,
+  and a masked timer overflow that must still raise FT1.
+
+### Fixed
+
+- The `pair_index` field comment said it was `ch_none` when 4-op was off. Init
+  pre-wires the physical partners, so a visualizer that treated a nonzero `pair_index`
+  as "4-op is on" would misread every capable channel after `init`.
+
 ## [2.0.1-1] - 2026-07-25
 
 ### Changed

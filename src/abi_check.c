@@ -116,6 +116,13 @@ const size_t opal_abi_opal_offsets[] = {
     offsetof(Opal, writeBufLastTime),
 };
 
+const int opal_abi_version[4] = {
+    OPAL_VERSION_MAJOR,
+    OPAL_VERSION_MINOR,
+    OPAL_VERSION_PATCH,
+    OPAL_VERSION,
+};
+
 #define OPAL_ABI_COUNT(array) (sizeof(array) / sizeof((array)[0]))
 
 const size_t opal_abi_counts[4] = {

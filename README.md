@@ -8,7 +8,7 @@ build system and exposes it as a native Zig module. There is no code generation 
 no dependency beyond libc.
 
 The version is the bound opal release plus a packaging revision. This is version
-2.0.1-1, binding opal 2.0.1. A binding-only fix bumps the revision, a new opal release
+2.0.2-1, binding opal 2.0.2. A binding-only fix bumps the revision, a new opal release
 resets it.
 
 Design decisions that shape the public API live in [doc/design.md](doc/design.md).
@@ -22,7 +22,7 @@ Design decisions that shape the public API live in [doc/design.md](doc/design.md
 Add the dependency:
 
 ```sh
-zig fetch --save git+https://github.com/RealBitdancer/opal-zig#v2.0.1-1
+zig fetch --save git+https://github.com/RealBitdancer/opal-zig#v2.0.2-1
 ```
 
 Wire it into your `build.zig`:
@@ -53,6 +53,9 @@ An `Opal` instance is a plain value with no internal pointers. Copy, assign, or
 relocate it freely: a copy is a complete save state. The struct is about 70 KiB, so
 `Opal.create(allocator, rate)` and `destroy` are provided to keep it off the stack.
 
+Bank 1, waveforms 4-7, CHA and CHB, and four-operator pairing apply only while NEW
+(register 105h bit 0) is set.
+
 ## API
 
 The eight C functions map to methods on `opal.Opal`:
@@ -74,13 +77,17 @@ stereo frames. The raw `opal*` functions are also exported for direct use.
 The structs (`Opal`, `Channel`, `Operator`, `WriteBuf`) are mirrored as `extern struct`
 with snake_case field names, so state useful to visualizers (`envelope_stage`, `eg_out`,
 `key`) is readable directly. `envelope_stage` and `chan_type` are typed as the
-non-exhaustive enums `EnvelopeStage` and `ChannelType`. Cross references between the
-structs are indices (`op_slot`, `mod_source`, `pair_index`, `out_source`) with the
-sentinels `op_none`, `mod_own_fb`, and `ch_none`, which is what makes a copied instance
-self-contained. `modulatorSlot(ch)` and `carrierSlot(ch)` return the operator indices
-for a melodic channel, as documented in the upstream header. The test suite verifies
-every field offset and struct size against the C compiler, so the mirrors cannot drift
-silently.
+non-exhaustive enums `EnvelopeStage` and `ChannelType`. `EnvelopeStage.off` is defined
+for visualizers. The core never writes it. Idle operators sit in `release` with
+`eg_out` at 511 or more. Cross references between the structs are indices (`op_slot`,
+`mod_source`, `pair_index`, `out_source`) with the sentinels `op_none`, `mod_own_fb`,
+and `ch_none`, which is what makes a copied instance self-contained. `pair_index` is
+the physical 4-op partner, pre-wired on capable channels. `chan_type` says whether 4-op
+is active. `modulatorSlot(ch)` and `carrierSlot(ch)` return the operator indices for a
+melodic channel, as documented in the upstream header. `version_major`, `version_minor`,
+`version_patch`, and the packed `version` match the `OPAL_VERSION_*` macros in
+`opal.h`. The test suite verifies every field offset and struct size against the C
+compiler, so the mirrors cannot drift silently.
 
 ## Demo
 
@@ -97,7 +104,8 @@ zig build test
 ```
 
 runs layout verification against the C compiler plus behavioral tests: silence after
-init, tone generation, save-state copies, buffered write equivalence, and pan.
+init, pair-index wiring, NEW as a live mode bit, tone generation, save-state copies,
+buffered write equivalence, pan, and timer flags.
 
 ## Updating the bound opal release
 
