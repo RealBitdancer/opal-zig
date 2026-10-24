@@ -17,7 +17,7 @@ tables together. The ABI test is the gate.
 
 ## Upstream C is a versioned dependency, not a vendored copy
 
-`build.zig.zon` pins `opal_c` to the opal release tarball (`v2.0.2`). `build.zig`
+`build.zig.zon` pins `opal_c` to the opal release tarball (`v3.0.0`). `build.zig`
 compiles `src/opal.c` from that package into the `opal` module.
 
 Updating means: new URL and hash, `zig build test`, fix mirrors if the ABI test fails,
@@ -60,12 +60,12 @@ Zig shape:
 var chip = opal.Opal.init(44100);
 ```
 
-`create` and `destroy` remain as heap helpers because the instance is about 70 KiB,
+`create` and `destroy` remain as heap helpers because the instance is about 66 KiB,
 which is worth keeping off the stack in deeply nested or threaded code.
 
 ## Cross references are index fields with sentinel constants
 
-`op_slot`, `chan_index`, `mod_source`, `pair_index`, and `out_source` mirror the
+`op_slot`, `mod_source`, `pair_index`, and `out_source` mirror the
 upstream `uint8_t` index fields directly. `pair_index` is the physical 4-op partner,
 pre-wired on capable channels even while `chan_type` is two-op. `ch_none` marks only
 channels that cannot pair. Whether 4-op is active is `chan_type`. The sentinels are
@@ -83,13 +83,19 @@ undefined behavior. `EnvelopeStage.off` is defined because the header defines it
 The core never writes it. Idle operators sit in `release` with `eg_out` at 511 or
 more.
 
+## Flag fields are bytes
+
+Upstream stores mode bits and operator flags as `uint8_t`. The mirrors use `u8`.
+A Zig `bool` would make any byte other than 0 or 1 illegal to read back from a
+chip that C had filled in.
+
 ## Methods are thin camelCase wrappers over the C API
 
 | Decision | Detail |
 | :------- | :----- |
 | Naming   | `writeReg`, `writeRegBuffered`, `readStatus`, and so on map one to one to the `opal*` functions. |
 | `init`   | Returns the instance by value, the conventional Zig constructor shape. |
-| `create` / `destroy` | Heap helpers that keep the ~70 KiB instance off the stack. |
+| `create` / `destroy` | Heap helpers that keep the ~66 KiB instance off the stack. |
 | `render` | Fills an interleaved stereo `[]i16` via `opalSample`. Not in C, convenience only. |
 | Raw externs | The `opal*` functions remain `pub` for callers that want the C surface directly. |
 

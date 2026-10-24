@@ -10,9 +10,9 @@
 
 const std = @import("std");
 
-pub const version_major = 2;
+pub const version_major = 3;
 pub const version_minor = 0;
-pub const version_patch = 2;
+pub const version_patch = 0;
 pub const version = version_major * 10000 + version_minor * 100 + version_patch;
 
 pub const opl3_sample_rate = 49716;
@@ -60,10 +60,10 @@ pub const StereoSample = struct {
     right: i16,
 };
 
-pub const WriteBuf = extern struct {
-    time: u64,
-    reg: u16,
-    data: u8,
+pub const QueuedWrite = extern struct {
+    due: u64,
+    reg_num: u16,
+    value: u8,
 };
 
 /// One FM operator, mapping to one OPL3 slot. Melodic channel ch uses
@@ -72,37 +72,31 @@ pub const WriteBuf = extern struct {
 /// slot + 9. All cross references are indices into Opal.op and Opal.chan,
 /// so a copied instance is fully self-contained.
 pub const Operator = extern struct {
-    slot_index: u8,
-    chan_index: u8,
-    /// Phase modulation input: an index into Opal.op whose out is read,
-    /// mod_own_fb for the operator's own feedback, or op_none for none.
-    mod_source: u8,
-    phase: u32,
-    phase_out: u16,
-    phase_reset: bool,
-    waveform: u16,
-    freq_mult_times2: u16,
     envelope_stage: EnvelopeStage,
-    envelope_level: u16,
     /// Current total attenuation (envelope + output level + KSL + tremolo)
     /// in 0.1875 dB steps, where 0 is loudest and 511 or more is silence.
     eg_out: u16,
-    eg_ksl: u8,
-    output_level: u16,
-    attack_rate: u16,
-    decay_rate: u16,
-    sustain_level: u16,
-    release_rate: u16,
-    key_scale_reg: u8,
     /// Nonzero while keyed on: bit 0 is normal key on, bit 1 is rhythm key on.
     key: u8,
+    /// Phase modulation input: an index into Opal.op whose out is read,
+    /// mod_own_fb for the operator's own feedback, or op_none for none.
+    mod_source: u8,
     out: i16,
     prev_out: i16,
-    fb_mod: i16,
-    key_scale_rate: bool,
-    sustain_mode: bool,
-    tremolo_enable: bool,
-    vibrato_enable: bool,
+    phase: u32,
+    envelope: u16,
+    tremolo: u8,
+    vibrato: u8,
+    sustain_hold: u8,
+    key_scale_rate: u8,
+    multiple: u8,
+    key_scale_level: u8,
+    total_level: u8,
+    attack_rate: u8,
+    decay_rate: u8,
+    sustain_level: u8,
+    release_rate: u8,
+    waveform: u8,
 };
 
 /// A single channel, which can contain two or more operators. op_slot holds
@@ -114,24 +108,21 @@ pub const Operator = extern struct {
 /// the channel output, describing the active FM algorithm routing.
 pub const Channel = extern struct {
     op_slot: [4]u8,
-    chan_index: u8,
     /// Physical 4-op partner. Pre-wired on capable channels even while
     /// chan_type is two_op. ch_none only on channels that cannot pair.
     pair_index: u8,
     out_source: [4]u8,
     chan_type: ChannelType,
-    freq: u16,
-    octave: u16,
-    key_scale_number: u16,
-    feedback_shift: u16,
-    modulation_type: u16,
-    alg: u16,
-    cha: u16,
-    chb: u16,
-    chc: u16,
-    chd: u16,
     left_pan: u16,
     right_pan: u16,
+    f_number: u16,
+    block: u8,
+    latched_key_scale_number: u8,
+    feedback: u8,
+    connection: u8,
+    /// Bit 0 is the left speaker, bit 1 the right. Init sets both.
+    output_enable: u8,
+    algorithm: u8,
 };
 
 /// Index into Opal.op of the modulator slot for melodic channel ch
@@ -158,44 +149,36 @@ pub const Opal = extern struct {
     sample_accum: i32,
     last_output: [2]i16,
     curr_output: [2]i16,
-    mix_buff_right: i32,
     chan: [channel_count]Channel,
     op: [operator_count]Operator,
-    chip_timer: u16,
-    tremolo_pos: u8,
-    tremolo_level: u8,
-    tremolo_shift: u8,
-    vib_pos: u8,
-    vib_shift: u8,
-    eg_timer: u64,
-    eg_state: u8,
-    eg_add: u8,
-    eg_timer_lo: u8,
-    eg_timer_rem: u8,
-    note_sel: bool,
-    opl3_enabled: bool,
-    rhythm_mode: bool,
-    waveform_select: bool,
-    composite_sine_wave: bool,
-    noise: u32,
-    rm_hh_bit2: u8,
-    rm_hh_bit3: u8,
-    rm_hh_bit7: u8,
-    rm_hh_bit8: u8,
-    rm_tc_bit3: u8,
-    rm_tc_bit5: u8,
-    rhythm_reg: u8,
     timer: [2]u8,
     timer_control: u8,
     timer_count: [2]u16,
     status: u8,
-    write_buf: [write_buf_size]WriteBuf,
-    write_buf_sample_count: u64,
-    write_buf_cur: u32,
-    write_buf_last: u32,
-    write_buf_last_time: u64,
+    new_mode: u8,
+    pair_enable: u8,
+    rhythm_mode: u8,
+    note_select: u8,
+    tremolo_depth: u8,
+    vibrato_depth: u8,
+    wave_select_enable: u8,
+    composite_sine: u8,
+    tremolo_position: u8,
+    tremolo_level: u8,
+    sample_counter: u16,
+    hi_hat_phase: u16,
+    cymbal_phase: u16,
+    noise: u32,
+    pending_right: i32,
+    chip_samples: u64,
+    last_due: u64,
+    queue_head: u16,
+    queue_count: u16,
+    queue: [write_buf_size]QueuedWrite,
 
     /// Return an initialized instance at the given output sample rate.
+    /// Zero or a negative rate selects 49716 Hz. Rates above
+    /// 2147483647 - 49716 clamp to that value.
     pub fn init(sample_rate_hz: i32) Opal {
         var self: Opal = undefined;
         opalInit(&self, @intCast(sample_rate_hz));
@@ -203,7 +186,7 @@ pub const Opal = extern struct {
     }
 
     /// Allocate and initialize an instance, keeping the sizable struct
-    /// (about 70 KiB) off the stack.
+    /// (about 66 KiB) off the stack.
     pub fn create(allocator: std.mem.Allocator, sample_rate_hz: i32) !*Opal {
         const self = try allocator.create(Opal);
         opalInit(self, @intCast(sample_rate_hz));
@@ -214,7 +197,9 @@ pub const Opal = extern struct {
         allocator.destroy(self);
     }
 
-    /// Change the output sample rate of an initialized instance.
+    /// Change the output sample rate. The write queue is left in place.
+    /// Zero or a negative rate selects 49716 Hz. Rates above
+    /// 2147483647 - 49716 clamp to that value.
     pub fn setSampleRate(self: *Opal, sample_rate_hz: i32) void {
         opalSetSampleRate(self, @intCast(sample_rate_hz));
     }
@@ -224,8 +209,10 @@ pub const Opal = extern struct {
         opalWriteReg(self, reg, value);
     }
 
-    /// Queue a register write. Queued writes apply write_buf_delay chip
-    /// samples apart, matching real chip timing.
+    /// Queue a register write. Queued writes land at least write_buf_delay
+    /// chip samples apart, so a key-off followed by a key-on still restarts
+    /// the envelope. The spacing is an emulator convention, much slower than
+    /// the chip's bus, so long bursts fall behind.
     pub fn writeRegBuffered(self: *Opal, reg: u16, value: u8) void {
         opalWriteRegBuffered(self, reg, value);
     }
@@ -236,7 +223,8 @@ pub const Opal = extern struct {
     }
 
     /// Set the panning level for a channel: 0 left, 64 middle, 127 right.
-    /// channel is 0 to 17, or 0 to 8 with bit 8 set for the second bank.
+    /// Values above 127 clamp to 127. channel is 0 to 17, or 0 to 8 with
+    /// bit 8 set for the second bank.
     pub fn pan(self: *Opal, channel: u16, level: u8) void {
         opalPan(self, channel, level);
     }
@@ -259,8 +247,9 @@ pub const Opal = extern struct {
     }
 
     /// Read the chip status register: bit 7 IRQ, bit 6 timer 1 overflow,
-    /// bit 5 timer 2 overflow. Flags stay set until a reset write (bit 7 of
-    /// register 4), as on real hardware.
+    /// bit 5 timer 2 overflow. A flag stays set until a reset write (bit 7
+    /// of register 4) or a write that sets that timer's mask bit. A masked
+    /// timer sets neither its flag nor IRQ.
     pub fn readStatus(self: *Opal) u8 {
         return opalReadStatus(self);
     }

@@ -4,6 +4,60 @@ All notable changes to this binding are documented here. The version is the boun
 release plus a packaging revision, so `1.0.2-1` is the first release binding opal
 `1.0.2`.
 
+## [3.0.0-1] - 2026-10-24
+
+### Changed
+
+- Requires Zig 0.17.0.
+- Binds opal 3.0.0. The emulation core is new. The eight functions keep their
+  names and signatures. Rendered output is not bit-identical to 2.0.2.
+- Struct mirrors follow the new layout. The visualizer fields keep their names and
+  meaning: `envelope_stage`, `eg_out`, `key`, `mod_source`, and `out` in `Operator`,
+  and `op_slot`, `pair_index`, `out_source`, `chan_type`, `left_pan`, and `right_pan`
+  in `Channel`. Other fields may be renamed, retyped, or rescaled. `WriteBuf` is now
+  `QueuedWrite` (`due`, `reg_num`, `value`). `output_enable` replaces the old
+  per-speaker flags. `Opal.opl3_enabled` is now `new_mode`. `sample_counter`
+  replaces `chip_timer`. `tremolo_depth` and `vibrato_depth` hold the BDh bits that
+  `tremolo_shift` and `vib_shift` encoded as shifts. `hi_hat_phase` and
+  `cymbal_phase` hold the phases that the `rm_*` bits sampled. The write-buffer
+  cursors are `queue`, `queue_head`, `queue_count`, `chip_samples`, and `last_due`.
+  Fields that used to be `bool` are `u8`, because the header stores them as
+  `uint8_t`.
+- Operator and channel register fields hold raw register values. `sustain_level`
+  keeps its name but is now 0-15 instead of a scaled level, so code that reads it
+  still compiles and gets different numbers. `total_level`, `multiple`, `feedback`,
+  `f_number`, and `block` replace `output_level`, `freq_mult_times2`,
+  `feedback_shift`, `freq`, and `octave`. `algorithm` replaces `alg` with a new
+  encoding. The envelope rates and `waveform` are `u8`.
+- NEW (register 105h bit 0) still gates new writes. While it is clear, bank 1
+  writes other than 105h land in bank 0, waveforms stay in 0-3, and a C0h write
+  turns on both speakers. Changing NEW no longer rewrites stored state. All 18
+  channels keep playing, and four-operator pairs follow register 104h alone.
+- A masked timer sets nothing. Setting a timer's mask bit clears a flag that is
+  already set. IRQ stays set only while a flag is set.
+- `init` and `setSampleRate` treat a rate of 0 or less as 49716 Hz and clamp
+  anything above 2147483647 - 49716. `setSampleRate` no longer clears the write
+  queue or the output history, so a queued write survives it. It still resets the
+  resampler phase in `sample_accum`. `pan` clamps a level above 127.
+- `init` still leaves every operator in `release` with `eg_out` at 0x1FF. It now
+  enables both speakers on every channel, so a voice is audible without a C0
+  write. The instance is about 66 KiB.
+
+### Added
+
+- Tests for the 3.0.0 behavior: NEW leaves stored state alone, bank 1 writes and
+  waveforms 4-7 apply only while NEW is set, four-operator pairing stays after
+  NEW is cleared, masked timers, sample-rate clamping, the write queue surviving
+  `setSampleRate`, and pan clamping.
+
+### Removed
+
+- `Operator.slot_index`, `Operator.chan_index`, and `Channel.chan_index`. `op_slot`,
+  `modulatorSlot`, and `carrierSlot` map channels to operators.
+- Internal state that upstream dropped, including `phase_out`, `phase_reset`,
+  `eg_ksl`, `fb_mod`, `chc`, `chd`, `vib_pos`, the `eg_*` envelope timer fields, and
+  `rhythm_reg`.
+
 ## [2.0.2-1] - 2026-08-13
 
 ### Changed

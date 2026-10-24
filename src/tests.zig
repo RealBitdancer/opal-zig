@@ -6,24 +6,29 @@ const opal = @import("opal");
 
 const testing = std.testing;
 
+fn fieldCount(comptime T: type) comptime_int {
+    return @typeInfo(T).@"struct".field_names.len;
+}
+
 extern const opal_abi_sizes: [4]usize;
 extern const opal_abi_counts: [4]usize;
 extern const opal_abi_version: [4]c_int;
-extern const opal_abi_write_buf_offsets: [std.meta.fields(opal.WriteBuf).len]usize;
-extern const opal_abi_operator_offsets: [std.meta.fields(opal.Operator).len]usize;
-extern const opal_abi_channel_offsets: [std.meta.fields(opal.Channel).len]usize;
-extern const opal_abi_opal_offsets: [std.meta.fields(opal.Opal).len]usize;
+extern const opal_abi_queued_write_offsets: [fieldCount(opal.QueuedWrite)]usize;
+extern const opal_abi_operator_offsets: [fieldCount(opal.Operator)]usize;
+extern const opal_abi_channel_offsets: [fieldCount(opal.Channel)]usize;
+extern const opal_abi_opal_offsets: [fieldCount(opal.Opal)]usize;
 
 fn expectLayout(comptime T: type, c_size: usize, c_field_count: usize, c_offsets: []const usize) !void {
-    try testing.expectEqual(c_field_count, std.meta.fields(T).len);
+    const names = @typeInfo(T).@"struct".field_names;
+    try testing.expectEqual(c_field_count, names.len);
     try testing.expectEqual(c_size, @sizeOf(T));
-    inline for (std.meta.fields(T), 0..) |field, i| {
-        try testing.expectEqual(c_offsets[i], @offsetOf(T, field.name));
+    inline for (names, 0..) |name, i| {
+        try testing.expectEqual(c_offsets[i], @offsetOf(T, name));
     }
 }
 
 test "struct layouts match the C compiler" {
-    try expectLayout(opal.WriteBuf, opal_abi_sizes[0], opal_abi_counts[0], &opal_abi_write_buf_offsets);
+    try expectLayout(opal.QueuedWrite, opal_abi_sizes[0], opal_abi_counts[0], &opal_abi_queued_write_offsets);
     try expectLayout(opal.Operator, opal_abi_sizes[1], opal_abi_counts[1], &opal_abi_operator_offsets);
     try expectLayout(opal.Channel, opal_abi_sizes[2], opal_abi_counts[2], &opal_abi_channel_offsets);
     try expectLayout(opal.Opal, opal_abi_sizes[3], opal_abi_counts[3], &opal_abi_opal_offsets);
@@ -34,10 +39,10 @@ test "version macros match the C header" {
     try testing.expectEqual(opal_abi_version[1], opal.version_minor);
     try testing.expectEqual(opal_abi_version[2], opal.version_patch);
     try testing.expectEqual(opal_abi_version[3], opal.version);
-    try testing.expectEqual(2, opal.version_major);
+    try testing.expectEqual(3, opal.version_major);
     try testing.expectEqual(0, opal.version_minor);
-    try testing.expectEqual(2, opal.version_patch);
-    try testing.expectEqual(20002, opal.version);
+    try testing.expectEqual(0, opal.version_patch);
+    try testing.expectEqual(30000, opal.version);
 }
 
 const RegWrite = struct { reg: u16, val: u8 };
@@ -71,6 +76,12 @@ fn channelEnergy(frames: []const i16) struct { left: u64, right: u64 } {
     return .{ .left = left, .right = right };
 }
 
+fn peakOf(frames: []const i16) u16 {
+    var peak: u16 = 0;
+    for (frames) |s| peak = @max(peak, @abs(s));
+    return peak;
+}
+
 test "initialized chip outputs silence" {
     var chip = opal.Opal.init(opal.opl3_sample_rate);
 
@@ -87,6 +98,7 @@ test "initialized chip outputs silence" {
     }
     for (chip.chan, 0..) |ch, i| {
         try testing.expectEqual(.two_op, ch.chan_type);
+        try testing.expectEqual(3, ch.output_enable);
         const bank_pos = i % 9;
         if (bank_pos < 3) {
             try testing.expectEqual(i + 3, ch.pair_index);
@@ -98,25 +110,47 @@ test "initialized chip outputs silence" {
     }
 }
 
-test "disabling 4-op leaves pair_index in place" {
+test "four-operator pairing follows register 104h alone" {
     var chip = opal.Opal.init(opal.opl3_sample_rate);
+
     chip.writeReg(0x105, 0x01);
     chip.writeReg(0x104, 0x01);
 
+    try testing.expectEqual(1, chip.new_mode);
+    try testing.expectEqual(1, chip.pair_enable);
     try testing.expectEqual(.four_op, chip.chan[0].chan_type);
     try testing.expectEqual(.four_op2, chip.chan[3].chan_type);
     try testing.expectEqual(3, chip.chan[0].pair_index);
     try testing.expectEqual(0, chip.chan[3].pair_index);
     try testing.expectEqual(.two_op, chip.chan[1].chan_type);
+    const paired = chip.chan;
+
+    chip.writeReg(0x105, 0x00);
+    try testing.expectEqual(0, chip.new_mode);
+    try testing.expectEqual(.four_op, chip.chan[0].chan_type);
+    try testing.expectEqual(.four_op2, chip.chan[3].chan_type);
+    try testing.expectEqual(3, chip.chan[0].pair_index);
+    try testing.expectEqual(0, chip.chan[3].pair_index);
+
+    // A C0 write recomputes the routing. The pair keeps its 4-op algorithm.
+    chip.writeReg(0xC0, 0x00);
+    try testing.expectEqual(paired[0], chip.chan[0]);
+    try testing.expectEqual(paired[3], chip.chan[3]);
 
     chip.writeReg(0x104, 0x00);
+    try testing.expectEqual(1, chip.pair_enable);
+    try testing.expectEqual(.four_op, chip.chan[0].chan_type);
+
+    chip.writeReg(0x105, 0x01);
+    chip.writeReg(0x104, 0x00);
+    try testing.expectEqual(0, chip.pair_enable);
     try testing.expectEqual(.two_op, chip.chan[0].chan_type);
     try testing.expectEqual(.two_op, chip.chan[3].chan_type);
     try testing.expectEqual(3, chip.chan[0].pair_index);
     try testing.expectEqual(0, chip.chan[3].pair_index);
 }
 
-test "NEW off keeps bank 1 silent and preserves CHA" {
+test "clearing NEW leaves bank 1 playing" {
     const chip = try opal.Opal.create(testing.allocator, opal.opl3_sample_rate);
     defer chip.destroy(testing.allocator);
 
@@ -136,35 +170,38 @@ test "NEW off keeps bank 1 silent and preserves CHA" {
     };
     for (bank1_voice) |w| chip.writeReg(w.reg, w.val);
 
-    try testing.expect(chip.opl3_enabled);
-    try testing.expectEqual(0xFFFF, chip.chan[9].cha);
-    try testing.expectEqual(0xFFFF, chip.chan[9].chb);
+    try testing.expectEqual(1, chip.new_mode);
+    try testing.expectEqual(1, chip.op[opal.modulatorSlot(9)].multiple);
 
     var frames: [4096]i16 = undefined;
     chip.render(&frames);
-    var peak_on: u16 = 0;
-    for (frames) |s| peak_on = @max(peak_on, @abs(s));
-    try testing.expect(peak_on > 1000);
+    try testing.expect(peakOf(&frames) > 1000);
 
     chip.writeReg(0x105, 0x00);
-    try testing.expect(!chip.opl3_enabled);
-    try testing.expectEqual(0xFFFF, chip.chan[9].cha);
-    try testing.expectEqual(0xFFFF, chip.chan[9].chb);
+    try testing.expectEqual(0, chip.new_mode);
+    try testing.expectEqual(1, chip.op[opal.modulatorSlot(9)].multiple);
+    try testing.expectEqual(3, chip.chan[9].output_enable);
 
     chip.render(&frames);
     chip.render(&frames);
-    var peak_off: u16 = 0;
-    for (frames) |s| peak_off = @max(peak_off, @abs(s));
-    try testing.expectEqual(0, peak_off);
-
-    chip.writeReg(0x105, 0x01);
-    chip.render(&frames);
-    var peak_back: u16 = 0;
-    for (frames) |s| peak_back = @max(peak_back, @abs(s));
-    try testing.expect(peak_back > 1000);
+    try testing.expect(peakOf(&frames) > 1000);
 }
 
-test "enabling OPL3 without writing C0 is silent" {
+test "bank 1 writes land in bank 0 while NEW is clear" {
+    var chip = opal.Opal.init(opal.opl3_sample_rate);
+    chip.writeReg(0x120, 0x0F);
+    try testing.expectEqual(0, chip.new_mode);
+    try testing.expectEqual(0x0F, chip.op[0].multiple);
+    try testing.expectEqual(0, chip.op[opal.modulatorSlot(9)].multiple);
+
+    chip.writeReg(0x105, 0x01);
+    try testing.expectEqual(0x0F, chip.op[0].multiple);
+    chip.writeReg(0x120, 0x03);
+    try testing.expectEqual(0x0F, chip.op[0].multiple);
+    try testing.expectEqual(3, chip.op[opal.modulatorSlot(9)].multiple);
+}
+
+test "a voice is audible without a C0 write" {
     const chip = try opal.Opal.create(testing.allocator, opal.opl3_sample_rate);
     defer chip.destroy(testing.allocator);
 
@@ -173,33 +210,58 @@ test "enabling OPL3 without writing C0 is silent" {
         chip.writeReg(w.reg, w.val);
     }
 
-    try testing.expect(chip.opl3_enabled);
-    try testing.expectEqual(0, chip.chan[0].cha);
-    try testing.expectEqual(0, chip.chan[0].chb);
+    try testing.expectEqual(1, chip.new_mode);
+    try testing.expectEqual(3, chip.chan[0].output_enable);
 
     var frames: [4096]i16 = undefined;
     chip.render(&frames);
-    for (frames) |s| try testing.expectEqual(0, s);
+    try testing.expect(peakOf(&frames) > 1000);
 }
 
-test "waveform 4 is stored while NEW is clear" {
+test "C0 speaker bits apply at write time" {
     var chip = opal.Opal.init(opal.opl3_sample_rate);
-    chip.writeReg(0xE0, 0x04);
-    try testing.expectEqual(4, chip.op[0].waveform);
-    try testing.expect(!chip.opl3_enabled);
+    chip.writeReg(0xC0, 0x10);
+    try testing.expectEqual(0, chip.new_mode);
+    try testing.expectEqual(3, chip.chan[0].output_enable);
+
+    chip.writeReg(0x105, 0x01);
+    try testing.expectEqual(3, chip.chan[0].output_enable);
+    chip.writeReg(0xC0, 0x10);
+    try testing.expectEqual(1, chip.chan[0].output_enable);
+
+    chip.writeReg(0x105, 0x00);
+    try testing.expectEqual(1, chip.chan[0].output_enable);
 }
 
-test "masked timer overflow still sets the timer flag" {
+test "waveforms above 3 are stored only while NEW is set" {
+    var chip = opal.Opal.init(opal.opl3_sample_rate);
+    chip.writeReg(0xE0, 0x07);
+    try testing.expectEqual(0, chip.new_mode);
+    try testing.expectEqual(3, chip.op[0].waveform);
+
+    chip.writeReg(0x105, 0x01);
+    try testing.expectEqual(3, chip.op[0].waveform);
+    chip.writeReg(0xE0, 0x07);
+    try testing.expectEqual(7, chip.op[0].waveform);
+
+    chip.writeReg(0x105, 0x00);
+    try testing.expectEqual(7, chip.op[0].waveform);
+}
+
+test "a masked timer sets nothing and a mask clears a raised flag" {
     var chip = opal.Opal.init(opal.opl3_sample_rate);
     chip.writeReg(0x02, 0xFF);
-    chip.writeReg(0x04, 0x41);
+    chip.writeReg(0x04, 0x01);
 
     var frames: [32]i16 = undefined;
     chip.render(&frames);
+    try testing.expectEqual(0xC0, chip.readStatus());
 
-    const status = chip.readStatus();
-    try testing.expectEqual(0x40, status & 0x40);
-    try testing.expectEqual(0, status & 0x80);
+    chip.writeReg(0x04, 0x41);
+    try testing.expectEqual(0, chip.readStatus());
+
+    chip.render(&frames);
+    try testing.expectEqual(0, chip.readStatus());
 }
 
 test "keyed-on voice produces audio and exposes operator state" {
@@ -210,10 +272,7 @@ test "keyed-on voice produces audio and exposes operator state" {
 
     var frames: [8192]i16 = undefined;
     chip.render(&frames);
-
-    var peak: u16 = 0;
-    for (frames) |s| peak = @max(peak, @abs(s));
-    try testing.expect(peak > 1000);
+    try testing.expect(peakOf(&frames) > 1000);
 
     const carrier = &chip.op[opal.carrierSlot(0)];
     try testing.expect(carrier.key != 0);
@@ -256,6 +315,40 @@ test "buffered writes match immediate writes after flush" {
     try testing.expectEqualSlices(i16, &immediate_frames, &buffered_frames);
 }
 
+test "setSampleRate keeps queued writes" {
+    var chip = opal.Opal.init(opal.opl3_sample_rate);
+    chip.writeRegBuffered(0x20, 0x21);
+    try testing.expectEqual(1, chip.queue_count);
+    try testing.expectEqual(0, chip.op[0].multiple);
+
+    chip.setSampleRate(48000);
+    try testing.expectEqual(48000, chip.sample_rate);
+    try testing.expectEqual(1, chip.queue_count);
+    try testing.expectEqual(0, chip.op[0].multiple);
+
+    chip.flushWriteBuf();
+    try testing.expectEqual(0, chip.queue_count);
+    try testing.expectEqual(1, chip.op[0].multiple);
+}
+
+test "sample rate clamps and zero or less selects the native rate" {
+    const limit: i32 = std.math.maxInt(i32) - opal.opl3_sample_rate;
+    var chip = opal.Opal.init(0);
+    try testing.expectEqual(opal.opl3_sample_rate, chip.sample_rate);
+
+    chip = opal.Opal.init(-1);
+    try testing.expectEqual(opal.opl3_sample_rate, chip.sample_rate);
+
+    chip.setSampleRate(44100);
+    try testing.expectEqual(44100, chip.sample_rate);
+
+    chip.setSampleRate(-1);
+    try testing.expectEqual(opal.opl3_sample_rate, chip.sample_rate);
+
+    chip.setSampleRate(limit + 1);
+    try testing.expectEqual(limit, chip.sample_rate);
+}
+
 // Regression: the resampler multiplied the 16.16 fraction by the step between
 // two chip samples in 32 bits. A step wider than half of full scale overflows,
 // which loud OPL3 material reaches routinely. Both steps here are wide enough
@@ -291,4 +384,16 @@ test "pan moves output between stereo channels" {
     chip.render(&frames);
     const hard_right = channelEnergy(&frames);
     try testing.expect(hard_right.right > hard_right.left * 4);
+}
+
+test "pan clamps levels above 127" {
+    var chip = opal.Opal.init(opal.opl3_sample_rate);
+    chip.pan(0, 127);
+    const left = chip.chan[0].left_pan;
+    const right = chip.chan[0].right_pan;
+    try testing.expect(left < right);
+
+    chip.pan(0, 255);
+    try testing.expectEqual(left, chip.chan[0].left_pan);
+    try testing.expectEqual(right, chip.chan[0].right_pan);
 }

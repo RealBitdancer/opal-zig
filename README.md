@@ -8,21 +8,21 @@ build system and exposes it as a native Zig module. There is no code generation 
 no dependency beyond libc.
 
 The version is the bound opal release plus a packaging revision. This is version
-2.0.2-1, binding opal 2.0.2. A binding-only fix bumps the revision, a new opal release
+3.0.0-1, binding opal 3.0.0. A binding-only fix bumps the revision, a new opal release
 resets it.
 
 Design decisions that shape the public API live in [doc/design.md](doc/design.md).
 
 ## Requirements
 
-- Zig 0.16.0 or newer.
+- Zig 0.17.0 or newer.
 
 ## Installation
 
 Add the dependency:
 
 ```sh
-zig fetch --save git+https://github.com/RealBitdancer/opal-zig#v2.0.2-1
+zig fetch --save git+https://github.com/RealBitdancer/opal-zig#v3.0.0-1
 ```
 
 Wire it into your `build.zig`:
@@ -50,11 +50,13 @@ chip.render(&frames);
 ```
 
 An `Opal` instance is a plain value with no internal pointers. Copy, assign, or
-relocate it freely: a copy is a complete save state. The struct is about 70 KiB, so
+relocate it freely: a copy is a complete save state. The struct is about 66 KiB, so
 `Opal.create(allocator, rate)` and `destroy` are provided to keep it off the stack.
 
-Bank 1, waveforms 4-7, CHA and CHB, and four-operator pairing apply only while NEW
-(register 105h bit 0) is set.
+While NEW (register 105h bit 0) is clear, writes to the second register array land
+in the first (except 105h itself), waveforms are limited to 0-3, and C0h writes turn
+on both speakers. Changing NEW does not touch anything already set. All 18 channels
+keep playing, and four-operator pairs follow register 104h alone.
 
 ## API
 
@@ -74,7 +76,7 @@ The eight C functions map to methods on `opal.Opal`:
 `Opal.render` is a convenience over `opalSample` that fills a buffer of interleaved
 stereo frames. The raw `opal*` functions are also exported for direct use.
 
-The structs (`Opal`, `Channel`, `Operator`, `WriteBuf`) are mirrored as `extern struct`
+The structs (`Opal`, `Channel`, `Operator`, `QueuedWrite`) are mirrored as `extern struct`
 with snake_case field names, so state useful to visualizers (`envelope_stage`, `eg_out`,
 `key`) is readable directly. `envelope_stage` and `chan_type` are typed as the
 non-exhaustive enums `EnvelopeStage` and `ChannelType`. `EnvelopeStage.off` is defined
@@ -83,8 +85,10 @@ for visualizers. The core never writes it. Idle operators sit in `release` with
 `mod_source`, `pair_index`, `out_source`) with the sentinels `op_none`, `mod_own_fb`,
 and `ch_none`, which is what makes a copied instance self-contained. `pair_index` is
 the physical 4-op partner, pre-wired on capable channels. `chan_type` says whether 4-op
-is active. `modulatorSlot(ch)` and `carrierSlot(ch)` return the operator indices for a
-melodic channel, as documented in the upstream header. `version_major`, `version_minor`,
+is active. `output_enable` bit 0 is the left speaker and bit 1 is the right. Init sets
+both. Mode bits and operator flags are `u8`, matching the header's `uint8_t`.
+`modulatorSlot(ch)` and `carrierSlot(ch)` return the operator indices for a melodic
+channel, as documented in the upstream header. `version_major`, `version_minor`,
 `version_patch`, and the packed `version` match the `OPAL_VERSION_*` macros in
 `opal.h`. The test suite verifies every field offset and struct size against the C
 compiler, so the mirrors cannot drift silently.
@@ -104,8 +108,8 @@ zig build test
 ```
 
 runs layout verification against the C compiler plus behavioral tests: silence after
-init, pair-index wiring, NEW as a live mode bit, tone generation, save-state copies,
-buffered write equivalence, pan, and timer flags.
+init, four-operator pairing, NEW at write time, tone generation, save-state copies,
+buffered write equivalence, sample-rate clamping, pan, and timer flags.
 
 ## Updating the bound opal release
 
@@ -120,5 +124,6 @@ buffered write equivalence, pan, and timer flags.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The underlying Opal core is public domain, and the C11 port
-is MIT. See the [upstream repository](https://github.com/RealBitdancer/opal) for details.
+MIT, see [LICENSE](LICENSE). opal is MIT too, including its emulation core. Only its
+output resampler follows Shayde of Reality's public-domain Opal. See the
+[upstream repository](https://github.com/RealBitdancer/opal) for details.
